@@ -1,0 +1,182 @@
+# ============================================================================
+# Prewalk presets — model-routing recipes per domain outcome.  (v1.1)
+#
+# Flow per task:  PLANNER explores + writes a capped todo + lands the first
+# edit  ->  hot-swap to EXECUTOR (cheaper/faster) to finish  ->  optional
+# deterministic VERIFY phase (tier scales with diff size)  ->  ADVISOR is a
+# tool the executor can call mid-task when stuck.
+#
+# Slot fields:
+#   provider  — Hermes provider id (anthropic, openai-codex, xai, gemini,
+#               openrouter, ...). "" lets Hermes auto-resolve.
+#   model     — model id as the provider knows it
+#   effort    — none|minimal|low|medium|high|xhigh|max|ultra
+#   fallbacks — ordered [provider, model] pairs tried if the switch fails
+#
+# Everything here is re-read on every /prewalk command — edit freely, no
+# restart. See README.md "Model cheat-sheet" for the why behind each choice.
+# ============================================================================
+
+default_preset: code-value
+
+settings:
+  edit_tools: [write_file, patch]
+  todo_cap: 10
+  max_planner_api_calls: 8
+  max_planning_seconds: 300
+
+# v1.2 uses one bounded executor-side verification nudge. Dedicated verifier
+# switching and diff-sized tiers remain out of the correctness release.
+verify:
+  enabled: true
+
+presets:
+
+  # --------------------------------------------------------------------
+  # SCIENTIFIC / BIOMEDICAL — deliberately Fable-free.
+  # Fable 5's post-July-1 classifiers reroute biology (and cyber) prompts to
+  # Opus 4.8 aggressively enough that even paper synthesis and "is this sauce
+  # ok" get flagged — so paying Fable rates for bio work is a lottery. Instead:
+  # Gemini 3.1 Pro does the hard reasoning it's genuinely best at (GPQA-D 94.3,
+  # top-3 vision for reading figures) but is agentically weak (early-terminates
+  # ~43% of failed tool loops) — so it PLANS only, then hands off to Grok 4.5
+  # for fast agentic execution. Sol @ high is the advisor when stuck.
+  # --------------------------------------------------------------------
+  sci:
+    description: "Biomed/science (Fable-free): Gemini 3.1 Pro reasons @ high -> Grok 4.5 executes @ medium; Sol @ high advisor"
+    planner:   { provider: gemini, model: gemini-3.1-pro-preview, effort: high,
+                 fallbacks: [[openai-codex, gpt-5.6-sol]] }
+    executor:  { provider: xai, model: grok-4.5, effort: medium,
+                 fallbacks: [[openai-codex, gpt-5.6-luna]] }
+    advisor:   { provider: openai-codex, model: gpt-5.6-sol, effort: high }
+
+  # --------------------------------------------------------------------
+  # HARD REASONING / ALGORITHMS — the "Gemini plans, fast model builds"
+  # pattern generalized. For tricky logic, algorithm design, math-adjacent
+  # code where the plan is the hard part and the edits are mechanical.
+  # --------------------------------------------------------------------
+  reason:
+    description: "Hard reasoning: Gemini 3.1 Pro @ high -> Luna executes @ xhigh; Sol @ high advisor"
+    planner:   { provider: gemini, model: gemini-3.1-pro-preview, effort: high,
+                 fallbacks: [[openai-codex, gpt-5.6-sol]] }
+    executor:  { provider: openai-codex, model: gpt-5.6-luna, effort: xhigh,
+                 fallbacks: [[xai, grok-4.5]] }
+    advisor:   { provider: openai-codex, model: gpt-5.6-sol, effort: high }
+
+  # --------------------------------------------------------------------
+  # BEST-QUALITY GENERAL CODING (non-bio/non-cyber). Fable 5 has the top
+  # design/judgment ceiling for general + physics + frontend work; capped at
+  # HIGH (its effective ceiling — xhigh/max aren't worth the burn). Executor
+  # is Grok 4.5, NOT Sonnet 5 (Sonnet 5 is the launch's poster child for
+  # slow + token-bloated: ~4x "dumber tokens" than gpt-5.5, more $/task than
+  # Opus 4.8). Opus 4.8 @ xhigh is the deep-debug advisor.
+  # If Fable reroutes (any security/bio phrasing), it falls back to Opus 4.8.
+  # --------------------------------------------------------------------
+  code-max:
+    description: "Top-quality general coding: Fable 5 @ high -> Grok 4.5 @ medium; Opus 4.8 @ xhigh advisor"
+    planner:   { provider: anthropic, model: claude-fable-5, effort: high,
+                 fallbacks: [[anthropic, claude-opus-4-8]] }
+    executor:  { provider: xai, model: grok-4.5, effort: medium,
+                 fallbacks: [[openai-codex, gpt-5.6-luna]] }
+    advisor:   { provider: anthropic, model: claude-opus-4-8, effort: xhigh }
+
+  # --------------------------------------------------------------------
+  # FAST + CHEAP CODING — all-OpenAI, community-optimal effort split.
+  # Consensus (Raschka / Artificial Analysis / practitioners): "ride Sol down,
+  # then Luna at higher effort" — Luna @ xhigh ≈ Sol @ medium quality at ~5x
+  # less quota, and everything below Sol-High is better served by Luna-higher.
+  # Same provider both slots -> the swap also works in gateway sessions.
+  # --------------------------------------------------------------------
+  code-value:
+    description: "Fast + cheap: GPT-5.6 Sol @ high -> Luna @ xhigh (same-provider, gateway-safe)"
+    planner:   { provider: openai-codex, model: gpt-5.6-sol, effort: high,
+                 fallbacks: [[openai-codex, gpt-5.5]] }
+    executor:  { provider: openai-codex, model: gpt-5.6-luna, effort: xhigh,
+                 fallbacks: [[openai-codex, gpt-5.6-terra]] }
+    advisor:   null
+
+  # --------------------------------------------------------------------
+  # ULTRA-CHEAP CODING — Sol drops to LOW to plan (you reported Sol-low reads
+  # as strong; it's a fine cheap planner), then Luna @ high executes. Lowest
+  # spend of the OpenAI presets; use when the task is well-scoped and routine.
+  # --------------------------------------------------------------------
+  code-cheap:
+    description: "Rock-bottom cost: GPT-5.6 Sol @ low -> Luna @ high (same-provider, gateway-safe)"
+    planner:   { provider: openai-codex, model: gpt-5.6-sol, effort: low,
+                 fallbacks: [[openai-codex, gpt-5.6-terra]] }
+    executor:  { provider: openai-codex, model: gpt-5.6-luna, effort: high }
+    advisor:   null
+
+  # --------------------------------------------------------------------
+  # APPLE / SWIFT / SwiftUI — Fable 5 for API-surface judgment + design taste;
+  # Grok 4.5 executes (repeatedly praised for SwiftUI/Metal intuition, ~80 TPS,
+  # ~4x fewer output tokens than Opus-class per fix, and NATIVE VISION so it
+  # can iterate off simulator screenshots). Opus 4.8 advisor.
+  # --------------------------------------------------------------------
+  apple:
+    description: "Apple/Swift: Fable 5 @ high -> Grok 4.5 @ medium (vision); Opus 4.8 @ high advisor"
+    planner:   { provider: anthropic, model: claude-fable-5, effort: high,
+                 fallbacks: [[anthropic, claude-opus-4-8]] }
+    executor:  { provider: xai, model: grok-4.5, effort: medium,
+                 fallbacks: [[openai-codex, gpt-5.6-luna]] }
+    advisor:   { provider: anthropic, model: claude-opus-4-8, effort: high }
+
+  # --------------------------------------------------------------------
+  # BACKEND / SYSTEMS / API / DB — usually NON-visual, so a text-only model is
+  # fine and cheap. Sol @ xhigh plans (endurance + Terminal-Bench 2.1 lead);
+  # GLM-5.2 @ high executes (community's cleanest open backend coder, ~1/10th
+  # Fable's price) — text-only is a non-issue here. Sol @ max advisor for
+  # race-condition / memory-corruption class bugs.
+  # --------------------------------------------------------------------
+  backend:
+    description: "Backend/systems: Sol @ xhigh -> GLM-5.2 @ high; Sol @ max advisor (text-only OK here)"
+    planner:   { provider: openai-codex, model: gpt-5.6-sol, effort: xhigh,
+                 fallbacks: [[anthropic, claude-opus-4-8]] }
+    executor:  { provider: openrouter, model: z-ai/glm-5.2, effort: high,
+                 fallbacks: [[xai, grok-4.5], [openai-codex, gpt-5.6-luna]] }
+    advisor:   { provider: openai-codex, model: gpt-5.6-sol, effort: max }
+
+  # --------------------------------------------------------------------
+  # FRONTEND / UI — needs a VISION-CAPABLE executor for screenshot-driven
+  # iteration, so NOT GLM-5.2 (it's blind — its #1 complaint). Fable 5 plans
+  # (best design taste of any current model — Sol's known weak spot), Grok 4.5
+  # executes with native vision. Opus 4.8 advisor.
+  # --------------------------------------------------------------------
+  frontend:
+    description: "Frontend/UI: Fable 5 @ high -> Grok 4.5 @ medium (vision); Opus 4.8 @ high advisor"
+    planner:   { provider: anthropic, model: claude-fable-5, effort: high,
+                 fallbacks: [[anthropic, claude-opus-4-8]] }
+    executor:  { provider: xai, model: grok-4.5, effort: medium,
+                 fallbacks: [[openai-codex, gpt-5.6-luna]] }
+    advisor:   { provider: anthropic, model: claude-opus-4-8, effort: high }
+
+  # --------------------------------------------------------------------
+  # SPEED — quick fixes / rapid iteration, all-xAI so it's gateway-safe.
+  # Grok 4.5 both slots: plans @ high, then the "switch" is a pure effort
+  # drop to LOW (xAI's latency tier for agentic use). No model swap at all —
+  # fastest possible handoff, keeps native vision, and Grok 4.5 beats the
+  # alternatives (Composer 2.5, grok-code-fast-1) on quality anyway.
+  # Tight caps: this preset is for short tasks.
+  # --------------------------------------------------------------------
+  speed:
+    description: "Speed runs: Grok 4.5 @ high plans -> same model drops to @ low (effort-only switch, gateway-safe)"
+    planner:   { provider: xai, model: grok-4.5, effort: high }
+    executor:  { provider: xai, model: grok-4.5, effort: low,
+                 fallbacks: [[xai, grok-code-fast-1]] }
+    advisor:   null
+    todo_cap: 8
+    max_planner_api_calls: 5
+
+  # --------------------------------------------------------------------
+  # OPEN-WEIGHTS BUDGET — no proprietary providers, all via OpenRouter.
+  # GLM-5.2 plans (best open planner + cleanest code), Kimi K2.7-Code executes
+  # (less verbose, low token use). Both text-only — non-visual work only.
+  # Swap provider to `nous` to route through the Nous Portal instead.
+  # --------------------------------------------------------------------
+  budget:
+    description: "Open-weights (no vision): GLM-5.2 @ high -> Kimi K2.7-Code @ medium (OpenRouter)"
+    planner:   { provider: openrouter, model: z-ai/glm-5.2, effort: high,
+                 fallbacks: [[openrouter, deepseek/deepseek-v4-pro]] }
+    executor:  { provider: openrouter, model: moonshotai/kimi-k2.7-code, effort: medium,
+                 fallbacks: [[openrouter, minimax/minimax-m3]] }
+    advisor:   null
