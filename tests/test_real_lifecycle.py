@@ -18,12 +18,18 @@ class _Provider(BaseHTTPRequestHandler):
     response_queue: list[dict] = []
 
     def do_POST(self):  # noqa: N802
-        length = int(self.headers.get("Content-Length", 0))
-        request = json.loads(self.rfile.read(length).decode())
-        type(self).captured.append(request)
-        response = type(self).response_queue.pop(0)
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length))
+        # Fresh Hermes homes issue model-context probes through the same
+        # chat-completions endpoint. Those probes do not carry the agent's
+        # tool schema and are not part of the task trajectory under test.
+        if not payload.get("tools"):
+            response = _text_response("context probe")
+        else:
+            type(self).captured.append(payload)
+            response = type(self).response_queue.pop(0)
         message = response["choices"][0]["message"]
-        if request.get("stream") is True:
+        if payload.get("stream") is True:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
@@ -173,6 +179,9 @@ def test_real_one_turn_request_sequence(monkeypatch, presets):
         monkeypatch.setattr(core, "load_presets", lambda: presets)
         monkeypatch.setattr(core, "_get_agent", lambda: agent)
         monkeypatch.setattr(core, "_get_cli", lambda: None)
+        monkeypatch.setattr(
+            "agent.verification_stop.verify_on_stop_enabled", lambda: False
+        )
 
         def switch_without_replacing_client(live_agent, slot):
             live_agent.model = slot["model"]

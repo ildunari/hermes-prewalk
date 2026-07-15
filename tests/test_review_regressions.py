@@ -118,3 +118,24 @@ def test_two_interleaved_sessions_keep_routes_counters_and_cleanup_independent(m
     assert core.get_state("session-b") is not None
     assert agent_a.model == "original-model"
     assert agent_b.model == "planner-other"
+
+
+def test_pre_verify_uses_host_directive_contract_once(fake_agent, monkeypatch, presets):
+    core.command_handler("test")
+    core.on_post_tool_call(
+        tool_name="todo", tool_args=VALID_TODO, status="ok", session_id=fake_agent.session_id
+    )
+    core.on_post_tool_call(tool_name="patch", status="ok", session_id=fake_agent.session_id)
+    core.on_llm_request(
+        request=_request(), session_id=fake_agent.session_id,
+        turn_id="turn-verify", api_call_count=4,
+    )
+    enabled = copy.deepcopy(presets)
+    enabled["verify"] = {"enabled": True}
+    monkeypatch.setattr(core, "load_presets", lambda: enabled)
+
+    directive = core.on_pre_verify(session_id=fake_agent.session_id, attempt=0)
+    assert directive is not None
+    assert directive["action"] == "continue"
+    assert "Prewalk verification" in directive["message"]
+    assert core.on_pre_verify(session_id=fake_agent.session_id, attempt=0) is None
