@@ -12,6 +12,7 @@ import copy
 import json
 import logging
 import re
+import shlex
 import threading
 import time
 from dataclasses import dataclass, field
@@ -55,6 +56,8 @@ class PrewalkState:
     preset: dict[str, Any]
     original: RuntimePosture
     agent: Any
+    active_planner: dict[str, Any]
+    active_executor: dict[str, Any]
     phase: str = "planning"
     planner_api_calls: int = 0
     seen_api_calls: set[tuple[str, int]] = field(default_factory=set)
@@ -331,6 +334,16 @@ def _handoff_note(state: PrewalkState) -> str:
     )
 
 
+def _budget_note() -> str:
+    return (
+        "<prewalk-budget-v1>\n"
+        "Prewalk's bounded planner budget was exhausted before a successful first edit. "
+        "The original model posture has been restored and Prewalk is disarmed. Continue the "
+        "task normally from the exploration already present in this trajectory.\n"
+        "</prewalk-budget-v1>"
+    )
+
+
 def _strip_marked_blocks(text: str) -> str:
     cleaned = _MARKED_BLOCK_RE.sub("", text)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
@@ -431,6 +444,9 @@ def on_llm_request(*, request=None, session_id="", turn_id="", api_call_count=0,
     if state is None or not isinstance(request, dict):
         return None
 
+    budget_exceeded = False
+    rewritten = request
+    changed = False
     with state.lock:
         phase = state.phase
         if phase == "planning":
@@ -442,35 +458,159 @@ def on_llm_request(*, request=None, session_id="", turn_id="", api_call_count=0,
             max_calls = int(_preset_setting(state.preset, data, "max_planner_api_calls", 8))
             max_seconds = float(_preset_setting(state.preset, data, "max_planning_seconds", 300))
             elapsed = time.monotonic() - state.planning_started_at
+            budget_exceeded = state.planner_api_calls > max_calls or elapsed > max_seconds
             state.budget_exhausted = state.planner_api_calls >= max_calls or elapsed >= max_seconds
-            injection = _planning_instruction(state)
-            target = _slot(state.preset, "planner")
+            injection = _planning_instruction(state) if not budget_exceeded else None
+            target = state.active_planner if not budget_exceeded else None
             reason = "planner routing and instruction injection"
         elif phase == "handoff_pending":
             injection = _handoff_note(state)
-            target = _slot(state.preset, "executor")
+            target = state.active_executor
             reason = "same-turn executor handoff"
         elif phase in {"executing", "verifying"}:
             injection = None
-            target = _slot(state.preset, "executor")
+            target = state.active_executor
             reason = "executor routing"
         else:
             injection = None
             target = None
             reason = "prewalk context cleanup"
 
-        rewritten, changed = _rewrite_request_context(request, injection)
-        if target:
-            rewritten["model"] = target["model"]
-            _rewrite_existing_effort(rewritten, str(target.get("effort", "") or ""))
-            changed = True
-        if phase == "handoff_pending":
-            state.handoff_injected = True
-            state.phase = "executing"
+        if not budget_exceeded:
+            rewritten, changed = _rewrite_request_context(request, injection)
+            if target:
+                rewritten["model"] = target["model"]
+                _rewrite_existing_effort(rewritten, str(target.get("effort", "") or ""))
+                changed = True
+            if phase == "handoff_pending":
+                state.handoff_injected = True
+                state.phase = "executing"
+
+    if budget_exceeded:
+        ok, restore_message = _restore_and_remove(state.session_id, "planner budget exhausted")
+        rewritten, _ = _rewrite_request_context(request, _budget_note())
+        if ok:
+            rewritten["model"] = state.original.model
+        else:
+            rewritten["model"] = str(getattr(state.agent, "model", request.get("model", "")))
+            logger.warning("prewalk budget restoration failed: %s", restore_message)
+        return {
+            "request": rewritten,
+            "source": "prewalk",
+            "reason": "bounded planner budget exhausted",
+        }
 
     if not changed:
         return None
     return {"request": rewritten, "source": "prewalk", "reason": reason}
+
+
+_VERIFY_WORD_RE = re.compile(r"\b(?:verify|validate|test|build|check|inspect|confirm|lint)\b", re.I)
+_READ_ONLY_COMMANDS = {
+    "cat", "cd", "cut", "du", "file", "git", "grep", "head", "jq", "ls",
+    "md5", "md5sum", "pwd", "rg", "shasum", "stat", "tail", "type", "uname",
+    "wc", "which", "yq",
+}
+_READ_ONLY_GIT_SUBCOMMANDS = {
+    "diff", "grep", "log", "ls-files", "merge-base", "rev-list", "rev-parse",
+    "show", "status",
+}
+_READ_ONLY_TOOL_NAMES = {
+    "browser_get_images", "browser_snapshot", "browser_vision", "github_repo_brief",
+    "google_places", "mem0_profile", "mem0_recall_recent", "mem0_search", "paper_fetch",
+    "paper_search", "read_file", "read_terminal", "search_files", "session_search",
+    "skill_view", "skills_list", "vision_analyze", "web_extract", "web_search",
+}
+_READ_ONLY_NAME_RE = re.compile(
+    r"(?:^|__|_)(?:get|list|search|read|fetch|view|inspect|snapshot|status|usage|"
+    r"trends|research)(?:_|$)",
+    re.I,
+)
+
+
+def _validate_todo_payload(args: Any, cap: int) -> str | None:
+    todos = args.get("todos") if isinstance(args, dict) else None
+    if not isinstance(todos, list) or not todos:
+        return "Prewalk requires a non-empty todo list before editing."
+    if len(todos) > cap:
+        return f"Prewalk requires at most {cap} todo items; consolidate the plan and retry."
+    for index, item in enumerate(todos, 1):
+        if not isinstance(item, dict):
+            return f"Prewalk todo item {index} must be an object."
+        if not str(item.get("id", "")).strip() or not str(item.get("content", "")).strip():
+            return f"Prewalk todo item {index} needs both an id and actionable content."
+        if not _VERIFY_WORD_RE.search(str(item.get("content", ""))):
+            return f"Prewalk todo item {index} must include a validation checkpoint (test/build/verify/check)."
+        if str(item.get("status", "")) not in {"pending", "in_progress", "completed"}:
+            return f"Prewalk todo item {index} has an invalid status."
+    return None
+
+
+def _git_subcommand(tokens: list[str]) -> str:
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"-C", "--git-dir", "--work-tree"}:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return token
+    return ""
+
+
+def _terminal_is_read_only(args: Any) -> bool:
+    command = str((args or {}).get("command", "") if isinstance(args, dict) else "").strip()
+    if not command or re.search(r">|\||`|\$\(|\btee\b|\bxargs\b", command):
+        return False
+    parts = [part.strip() for part in re.split(r"(?:&&|\|\||;|\n)", command) if part.strip()]
+    if not parts:
+        return False
+    for part in parts:
+        try:
+            tokens = shlex.split(part)
+        except ValueError:
+            return False
+        if not tokens:
+            continue
+        executable = Path(tokens[0]).name
+        if executable not in _READ_ONLY_COMMANDS:
+            return False
+        if executable == "git":
+            if _git_subcommand(tokens) not in _READ_ONLY_GIT_SUBCOMMANDS:
+                return False
+            if any(token == "--output" or token.startswith("--output=") for token in tokens[1:]):
+                return False
+        if executable in {"jq", "yq"} and any(
+            token == "-i" or token.startswith("--in-place") for token in tokens[1:]
+        ):
+            return False
+    return True
+
+
+def _named_tool_is_read_only(tool_name: str, args: Any) -> bool:
+    if tool_name in _READ_ONLY_TOOL_NAMES:
+        return True
+    if tool_name == "terminal":
+        return _terminal_is_read_only(args)
+    if tool_name == "process" and isinstance(args, dict):
+        return str(args.get("action", "")) in {"list", "poll", "log", "wait"}
+    if tool_name == "cronjob" and isinstance(args, dict):
+        return str(args.get("action", "")) == "list"
+    if tool_name == "fs" and isinstance(args, dict):
+        return str(args.get("action", "")) in {"read", "search", "list"}
+    return bool(_READ_ONLY_NAME_RE.search(tool_name))
+
+
+def _is_mutation_capable(tool_name: str, args: Any, edit_tools: set[str]) -> bool:
+    if tool_name in edit_tools:
+        return True
+    if tool_name == "tool_call" and isinstance(args, dict):
+        deferred = str(args.get("name") or args.get("tool_name") or "")
+        deferred_args = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
+        return deferred in edit_tools or not _named_tool_is_read_only(deferred, deferred_args)
+    return not _named_tool_is_read_only(tool_name, args)
 
 
 def on_pre_tool_call(*, tool_name="", args=None, session_id="", **kwargs):
@@ -483,26 +623,23 @@ def on_pre_tool_call(*, tool_name="", args=None, session_id="", **kwargs):
         if state.phase != "planning":
             return None
         if tool_name == "todo":
-            todos = (args or {}).get("todos") if isinstance(args, dict) else None
             cap = int(_preset_setting(state.preset, data, "todo_cap", 10))
-            if isinstance(todos, list) and len(todos) > cap:
-                return {
-                    "action": "block",
-                    "message": f"Prewalk requires at most {cap} todo items; consolidate the plan and retry.",
-                }
+            validation_error = _validate_todo_payload(args, cap)
+            if validation_error:
+                return {"action": "block", "message": validation_error}
             return None
-        if tool_name not in edit_tools or state.todo_ready:
+        if not _is_mutation_capable(tool_name, args, edit_tools) or state.todo_ready:
             return None
         state.blocked_edits += 1
         if state.blocked_edits < 2:
             return {
                 "action": "block",
-                "message": "Prewalk requires a successful capped todo with validation checkpoints before the first edit.",
+                "message": "Prewalk requires a successful capped todo with validation checkpoints before any mutation-capable tool.",
             }
-    _restore_and_remove(state.session_id, "repeated edit before todo")
+    _restore_and_remove(state.session_id, "repeated mutation attempt before todo")
     return {
         "action": "block",
-        "message": "Prewalk disarmed after a second edit attempt without the required todo; original model posture restored.",
+        "message": "Prewalk disarmed after a second mutation attempt without the required todo; original model posture restored.",
     }
 
 
@@ -519,6 +656,12 @@ def _transition_to_executor(state: PrewalkState) -> None:
     with state.lock:
         state.transitioning = False
         if ok:
+            assert executor is not None
+            state.active_executor = {
+                **executor,
+                "model": str(getattr(state.agent, "model", executor["model"])),
+                "provider": str(getattr(state.agent, "provider", executor.get("provider", ""))),
+            }
             state.first_edit_landed = True
             state.phase = "handoff_pending"
             state.last_error = ""
@@ -529,20 +672,26 @@ def _transition_to_executor(state: PrewalkState) -> None:
             logger.warning("prewalk: executor switch failed for %s: %s", state.session_id, message)
 
 
-def on_post_tool_call(*, tool_name="", status="", session_id="", **kwargs):
+def on_post_tool_call(*, tool_name="", args=None, tool_args=None, status="", session_id="", **kwargs):
     state = get_state(str(session_id or ""))
     if state is None:
         return None
+    effective_args = args if args is not None else tool_args
     with state.lock:
         if state.phase != "planning":
             return None
+        data = load_presets()
         if tool_name == "todo":
-            if status == "ok":
+            cap = int(_preset_setting(state.preset, data, "todo_cap", 10))
+            if status == "ok" and _validate_todo_payload(effective_args, cap) is None:
                 state.todo_ready = True
             return None
-        data = load_presets()
         edit_tools = set(_preset_setting(state.preset, data, "edit_tools", ["write_file", "patch"]))
-        should_transition = tool_name in edit_tools and status == "ok" and state.todo_ready
+        should_transition = (
+            _is_mutation_capable(tool_name, effective_args, edit_tools)
+            and status == "ok"
+            and state.todo_ready
+        )
     if should_transition:
         _transition_to_executor(state)
     return None
@@ -624,6 +773,12 @@ def _arm(preset_name: str, agent: Any) -> str:
         preset=copy.deepcopy(preset),
         original=original,
         agent=agent,
+        active_planner={
+            **planner,
+            "model": str(getattr(agent, "model", planner["model"])),
+            "provider": str(getattr(agent, "provider", planner.get("provider", ""))),
+        },
+        active_executor=copy.deepcopy(executor),
     )
     with _STATES_LOCK:
         _STATES[session_id] = state

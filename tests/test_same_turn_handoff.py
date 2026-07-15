@@ -35,7 +35,11 @@ def test_middleware_owns_planning_injection_and_same_turn_handoff(fake_agent):
     assert _wire(planning_2).count(core.PLANNING_OPEN) == 1
 
     core.on_post_tool_call(
-        tool_name="todo", status="ok", session_id=fake_agent.session_id, result='{"ok": true}'
+        tool_name="todo", status="ok", session_id=fake_agent.session_id,
+        tool_args={"todos": [{
+            "id": "widget", "content": "Edit widget; verify with focused tests", "status": "pending"
+        }]},
+        result='{"ok": true}'
     )
     core.on_post_tool_call(
         tool_name="patch", status="ok", session_id=fake_agent.session_id, result='{"ok": true}'

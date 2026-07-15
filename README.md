@@ -75,12 +75,11 @@ Start an interactive CLI session, then arm one task:
 ```
 
 The default preset is `code-value`. You can choose another preset explicitly:
-
 ```text
+/prewalk code-value
 /prewalk code-max
-/prewalk balanced
 /prewalk speed
-/prewalk open-budget
+/prewalk budget
 ```
 
 Other commands:
@@ -94,6 +93,13 @@ Other commands:
 After arming, send the coding task normally. Prewalk is one-shot by default: completion restores the exact original provider/model/API posture and reasoning configuration, then removes the session state.
 
 ## Presets
+
+The bundled presets are editable YAML examples. Model aliases such as
+`gpt-5.6-sol`, `gpt-5.6-luna`, and `claude-fable-5` are available in the
+environment this plugin was developed for but may not exist in a stock Hermes
+installation. Run `/prewalk list`, then edit `presets.yaml` to use planner and
+executor models your Hermes profile can resolve. Prewalk fails before arming if
+no planner candidate can be resolved.
 
 Edit `prewalk/presets.yaml` to add or change routes. Each preset needs planner and executor slots:
 
@@ -145,12 +151,16 @@ python -m pytest -q
 
 The local release suite includes unit/state tests plus a trajectory-level integration test against a local mock OpenAI-compatible server. The integration test requires a Hermes Agent source checkout at `~/.hermes/hermes-agent` or `HERMES_AGENT_ROOT`.
 
-Compatibility baseline used for v1.2:
+Compatibility matrix used for v1.2:
 
-```text
-Hermes Agent v0.18.2
-commit 64aa413ac2408a36095319a6989e60b55de0fd1b
-```
+| Hermes surface | Revision | Result |
+| --- | --- | --- |
+| NousResearch v0.18.2 upstream `main` | `da4a28ec6db3c1e391db9abde20a60c828fa322e` | Full same-turn trajectory passes |
+| Kosta v0.18.2 local runtime | `64aa413ac2408a36095319a6989e60b55de0fd1b` | Full same-turn trajectory passes |
+
+CI pins the upstream revision instead of silently testing against a moving host
+lifecycle. The local-runtime result covers the customized checkout used during
+development.
 
 ## License
 

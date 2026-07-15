@@ -5,10 +5,22 @@ import copy
 from prewalk import core
 
 
+VALID_TODO = {
+    "todos": [{
+        "id": "edit",
+        "content": "Edit the target; verify with focused tests",
+        "status": "pending",
+    }]
+}
+
+
 def test_failed_executor_switch_does_not_advance_phase(fake_agent, monkeypatch):
     core.command_handler("test")
     state = core.get_state(fake_agent.session_id)
-    core.on_post_tool_call(tool_name="todo", status="ok", session_id=fake_agent.session_id, result="{}")
+    core.on_post_tool_call(
+        tool_name="todo", tool_args=VALID_TODO, status="ok",
+        session_id=fake_agent.session_id, result="{}"
+    )
     monkeypatch.setattr(core, "_switch_live_agent", lambda agent, slot: (False, "executor unavailable"))
 
     core.on_post_tool_call(tool_name="patch", status="ok", session_id=fake_agent.session_id, result="{}")
@@ -20,13 +32,30 @@ def test_failed_executor_switch_does_not_advance_phase(fake_agent, monkeypatch):
 
 def test_post_llm_restores_full_posture_and_removes_state(fake_agent):
     original_reasoning = copy.deepcopy(fake_agent.reasoning_config)
+    original_transport = (fake_agent.base_url, fake_agent.api_mode, fake_agent.api_key)
     core.command_handler("test")
     core.on_post_llm_call(session_id=fake_agent.session_id, assistant_response="done")
 
     assert core.get_state(fake_agent.session_id) is None
     assert fake_agent.model == "original-model"
     assert fake_agent.provider == "openai-codex"
+    assert (fake_agent.base_url, fake_agent.api_mode, fake_agent.api_key) == original_transport
     assert fake_agent.reasoning_config == original_reasoning
+
+
+def test_restore_failure_keeps_failed_state_for_explicit_recovery(fake_agent):
+    core.command_handler("test")
+
+    def fail_switch(**kwargs):
+        raise RuntimeError("restore transport failed")
+
+    fake_agent.switch_model = fail_switch
+    core.on_post_llm_call(session_id=fake_agent.session_id, assistant_response="done")
+
+    state = core.get_state(fake_agent.session_id)
+    assert state is not None
+    assert state.phase == "failed"
+    assert "restore transport failed" in state.last_error
 
 
 def test_gateway_or_headless_command_cannot_arm(monkeypatch, presets):

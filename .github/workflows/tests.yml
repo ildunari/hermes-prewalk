@@ -14,3 +14,17 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e '.[test]'
       - run: python -m pytest -m 'not integration' -q
+
+  hermes-trajectory:
+    runs-on: ubuntu-latest
+    env:
+      HERMES_COMPAT_SHA: da4a28ec6db3c1e391db9abde20a60c828fa322e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: git clone --filter=blob:none --no-checkout https://github.com/NousResearch/hermes-agent.git hermes-agent
+      - run: git -C hermes-agent checkout "$HERMES_COMPAT_SHA"
+      - run: python -m pip install -e ./hermes-agent -e '.[test]'
+      - run: HERMES_AGENT_ROOT="$PWD/hermes-agent" python -m pytest -m integration -q

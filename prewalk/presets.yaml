@@ -85,10 +85,10 @@ presets:
   # Consensus (Raschka / Artificial Analysis / practitioners): "ride Sol down,
   # then Luna at higher effort" — Luna @ xhigh ≈ Sol @ medium quality at ~5x
   # less quota, and everything below Sol-High is better served by Luna-higher.
-  # Same provider both slots -> the swap also works in gateway sessions.
+  # Same-provider pair for users who keep both roles on OpenAI Codex.
   # --------------------------------------------------------------------
   code-value:
-    description: "Fast + cheap: GPT-5.6 Sol @ high -> Luna @ xhigh (same-provider, gateway-safe)"
+    description: "Fast + cheap: GPT-5.6 Sol @ high -> Luna @ xhigh"
     planner:   { provider: openai-codex, model: gpt-5.6-sol, effort: high,
                  fallbacks: [[openai-codex, gpt-5.5]] }
     executor:  { provider: openai-codex, model: gpt-5.6-luna, effort: xhigh,
@@ -101,7 +101,7 @@ presets:
   # spend of the OpenAI presets; use when the task is well-scoped and routine.
   # --------------------------------------------------------------------
   code-cheap:
-    description: "Rock-bottom cost: GPT-5.6 Sol @ low -> Luna @ high (same-provider, gateway-safe)"
+    description: "Rock-bottom cost: GPT-5.6 Sol @ low -> Luna @ high"
     planner:   { provider: openai-codex, model: gpt-5.6-sol, effort: low,
                  fallbacks: [[openai-codex, gpt-5.6-terra]] }
     executor:  { provider: openai-codex, model: gpt-5.6-luna, effort: high }

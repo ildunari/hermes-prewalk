@@ -23,10 +23,10 @@ class FakeAgent:
         self.platform = "cli"
         self.model = "original-model"
         self.provider = "openai-codex"
-        self.base_url = "https://example.invalid/v1"
-        self.api_mode = "chat_completions"
-        self.api_key = "test-key"
-        self.reasoning_config = {"effort": "medium"}
+        self.base_url = "https://original.invalid/v1"
+        self.api_mode = "responses"
+        self.api_key = "original-secret"
+        self.reasoning_config = {"effort": "medium", "summary": "auto"}
         names = ["read_file", "patch", "write_file"]
         if with_todo:
             names.append("todo")
@@ -71,5 +71,14 @@ def fake_agent(monkeypatch, presets):
     monkeypatch.setattr(core, "load_presets", lambda: copy.deepcopy(presets))
     monkeypatch.setattr(core, "_get_agent", lambda: agent)
     monkeypatch.setattr(core, "_get_cli", lambda: None)
-    monkeypatch.setattr(core, "_switch_live_agent", lambda agent, slot: (True, f"{slot['model']} switched"))
+    def fake_switch(live_agent, slot):
+        live_agent.model = slot["model"]
+        live_agent.provider = slot["provider"]
+        live_agent.base_url = "https://planner.invalid/v1"
+        live_agent.api_mode = "chat_completions"
+        live_agent.api_key = "planner-secret"
+        live_agent.reasoning_config = {"effort": slot.get("effort")}
+        return True, f"{slot['model']} switched"
+
+    monkeypatch.setattr(core, "_switch_live_agent", fake_switch)
     return agent
