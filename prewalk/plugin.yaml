@@ -5,7 +5,7 @@ description: >
   codebase, creates a capped todo with validation checkpoints, and lands one
   successful edit. Request middleware then removes the planning instruction and
   gives the same trajectory to a faster executor on the very next model call.
-author: Kosta Milovanovic
+author: ildunari
 provides_hooks:
   - pre_tool_call
   - post_tool_call

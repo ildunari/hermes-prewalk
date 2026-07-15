@@ -156,11 +156,9 @@ Compatibility matrix used for v1.2:
 | Hermes surface | Revision | Result |
 | --- | --- | --- |
 | NousResearch v0.18.2 upstream `main` | `da4a28ec6db3c1e391db9abde20a60c828fa322e` | Full same-turn trajectory passes |
-| Kosta v0.18.2 local runtime | `64aa413ac2408a36095319a6989e60b55de0fd1b` | Full same-turn trajectory passes |
 
 CI pins the upstream revision instead of silently testing against a moving host
-lifecycle. The local-runtime result covers the customized checkout used during
-development.
+lifecycle.
 
 ## License
 

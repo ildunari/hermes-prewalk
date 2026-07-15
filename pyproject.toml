@@ -9,7 +9,7 @@ description = "Correct same-trajectory frontier-planner to fast-executor handoff
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{name = "Kosta Milovanovic"}]
+authors = [{name = "ildunari"}]
 dependencies = ["PyYAML>=6"]
 
 [project.entry-points."hermes_agent.plugins"]
