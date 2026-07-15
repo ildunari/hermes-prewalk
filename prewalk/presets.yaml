@@ -34,19 +34,15 @@ presets:
 
   # --------------------------------------------------------------------
   # SCIENTIFIC / BIOMEDICAL — deliberately Fable-free.
-  # Fable 5's post-July-1 classifiers reroute biology (and cyber) prompts to
-  # Opus 4.8 aggressively enough that even paper synthesis and "is this sauce
-  # ok" get flagged — so paying Fable rates for bio work is a lottery. Instead:
-  # Gemini 3.1 Pro does the hard reasoning it's genuinely best at (GPQA-D 94.3,
-  # top-3 vision for reading figures) but is agentically weak (early-terminates
-  # ~43% of failed tool loops) — so it PLANS only, then hands off to Grok 4.5
-  # for fast agentic execution. Sol @ high is the advisor when stuck.
+  # Gemini 3.1 Pro performs the hard reasoning and figure-reading plan, then
+  # hands the complete trajectory to Opus 4.8 @ medium for careful scientific
+  # execution. Sol @ high remains advisor data for future advisor routing.
   # --------------------------------------------------------------------
   sci:
-    description: "Biomed/science (Fable-free): Gemini 3.1 Pro reasons @ high -> Grok 4.5 executes @ medium; Sol @ high advisor"
+    description: "Biomed/science (Fable-free): Gemini 3.1 Pro @ high -> Opus 4.8 @ medium; Sol @ high advisor"
     planner:   { provider: gemini, model: gemini-3.1-pro-preview, effort: high,
                  fallbacks: [[openai-codex, gpt-5.6-sol]] }
-    executor:  { provider: xai, model: grok-4.5, effort: medium,
+    executor:  { provider: anthropic, model: claude-opus-4-8, effort: medium,
                  fallbacks: [[openai-codex, gpt-5.6-luna]] }
     advisor:   { provider: openai-codex, model: gpt-5.6-sol, effort: high }
 
@@ -65,19 +61,16 @@ presets:
 
   # --------------------------------------------------------------------
   # BEST-QUALITY GENERAL CODING (non-bio/non-cyber). Fable 5 has the top
-  # design/judgment ceiling for general + physics + frontend work; capped at
-  # HIGH (its effective ceiling — xhigh/max aren't worth the burn). Executor
-  # is Grok 4.5, NOT Sonnet 5 (Sonnet 5 is the launch's poster child for
-  # slow + token-bloated: ~4x "dumber tokens" than gpt-5.5, more $/task than
-  # Opus 4.8). Opus 4.8 @ xhigh is the deep-debug advisor.
-  # If Fable reroutes (any security/bio phrasing), it falls back to Opus 4.8.
+  # design/judgment ceiling for general + physics + frontend work; it plans at
+  # HIGH, then continues the inherited trajectory at MEDIUM for implementation.
+  # Opus 4.8 @ xhigh remains the deep-debug advisor datum.
   # --------------------------------------------------------------------
   code-max:
-    description: "Top-quality general coding: Fable 5 @ high -> Grok 4.5 @ medium; Opus 4.8 @ xhigh advisor"
+    description: "Top-quality general coding: Fable 5 @ high -> Fable 5 @ medium; Opus 4.8 @ xhigh advisor"
     planner:   { provider: anthropic, model: claude-fable-5, effort: high,
                  fallbacks: [[anthropic, claude-opus-4-8]] }
-    executor:  { provider: xai, model: grok-4.5, effort: medium,
-                 fallbacks: [[openai-codex, gpt-5.6-luna]] }
+    executor:  { provider: anthropic, model: claude-fable-5, effort: medium,
+                 fallbacks: [[anthropic, claude-opus-4-8], [openai-codex, gpt-5.6-luna]] }
     advisor:   { provider: anthropic, model: claude-opus-4-8, effort: xhigh }
 
   # --------------------------------------------------------------------
@@ -109,15 +102,14 @@ presets:
 
   # --------------------------------------------------------------------
   # APPLE / SWIFT / SwiftUI — Fable 5 for API-surface judgment + design taste;
-  # Grok 4.5 executes (repeatedly praised for SwiftUI/Metal intuition, ~80 TPS,
-  # ~4x fewer output tokens than Opus-class per fix, and NATIVE VISION so it
-  # can iterate off simulator screenshots). Opus 4.8 advisor.
+  # Opus 4.8 @ medium executes carefully and retains native vision for simulator
+  # screenshot iteration. Opus 4.8 @ high remains the advisor datum.
   # --------------------------------------------------------------------
   apple:
-    description: "Apple/Swift: Fable 5 @ high -> Grok 4.5 @ medium (vision); Opus 4.8 @ high advisor"
+    description: "Apple/Swift: Fable 5 @ high -> Opus 4.8 @ medium (vision); Opus 4.8 @ high advisor"
     planner:   { provider: anthropic, model: claude-fable-5, effort: high,
                  fallbacks: [[anthropic, claude-opus-4-8]] }
-    executor:  { provider: xai, model: grok-4.5, effort: medium,
+    executor:  { provider: anthropic, model: claude-opus-4-8, effort: medium,
                  fallbacks: [[openai-codex, gpt-5.6-luna]] }
     advisor:   { provider: anthropic, model: claude-opus-4-8, effort: high }
 
@@ -138,16 +130,15 @@ presets:
 
   # --------------------------------------------------------------------
   # FRONTEND / UI — needs a VISION-CAPABLE executor for screenshot-driven
-  # iteration, so NOT GLM-5.2 (it's blind — its #1 complaint). Fable 5 plans
-  # (best design taste of any current model — Sol's known weak spot), Grok 4.5
-  # executes with native vision. Opus 4.8 advisor.
+  # iteration, so NOT GLM-5.2. Fable 5 plans for design judgment, then Opus 4.8
+  # @ medium executes with native vision. Opus 4.8 @ high remains advisor data.
   # --------------------------------------------------------------------
   frontend:
-    description: "Frontend/UI: Fable 5 @ high -> Grok 4.5 @ medium (vision); Opus 4.8 @ high advisor"
+    description: "Frontend/UI: Fable 5 @ high -> Opus 4.8 @ medium (vision); Opus 4.8 @ high advisor"
     planner:   { provider: anthropic, model: claude-fable-5, effort: high,
                  fallbacks: [[anthropic, claude-opus-4-8]] }
-    executor:  { provider: xai, model: grok-4.5, effort: medium,
-                 fallbacks: [[openai-codex, gpt-5.6-luna]] }
+    executor:  { provider: anthropic, model: claude-opus-4-8, effort: medium,
+                 fallbacks: [[xai, grok-4.5], [openai-codex, gpt-5.6-luna]] }
     advisor:   { provider: anthropic, model: claude-opus-4-8, effort: high }
 
   # --------------------------------------------------------------------

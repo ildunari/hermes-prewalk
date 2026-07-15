@@ -1,5 +1,5 @@
 name: prewalk
-version: "1.2.0"
+version: "1.2.1"
 description: >
   CLI-only one-shot Prewalk for Hermes Agent. A frontier planner explores the
   codebase, creates a capped todo with validation checkpoints, and lands one

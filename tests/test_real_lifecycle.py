@@ -122,7 +122,7 @@ def test_real_one_turn_request_sequence(monkeypatch, presets):
 
     manager = PluginManager()
     monkeypatch.setattr(plugins_mod, "_plugin_manager", manager)
-    prewalk.register(PluginContext(PluginManifest(name="prewalk", version="1.2.0"), manager))
+    prewalk.register(PluginContext(PluginManifest(name="prewalk", version="1.2.1"), manager))
 
     _Provider.captured = []
     workdir = Path(__file__).resolve().parents[1] / ".pytest-work"

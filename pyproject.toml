@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-prewalk"
-version = "1.2.0"
+version = "1.2.1"
 description = "Correct same-trajectory frontier-planner to fast-executor handoff for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11"
